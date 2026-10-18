@@ -7,22 +7,26 @@ from telegram.ext import (
 )
 from config import BOT_TOKEN
 from db import init_db, add_account, get_account_count
+from accounts import import_session_file
 from engine import mass_report, full_mass_report, ALL_REASONS
 
 AWAIT_TARGET, AWAIT_REASON     = range(2)
 AWAIT_SESSION_STR, AWAIT_PHONE = range(2, 4)
 AWAIT_FULL_TARGET              = 4
+AWAIT_SESSION_FILE             = 5
 
 REASON_KB = [["spam", "violence"], ["porn", "other"], ["child"]]
+
+# ==================== КОМАНДЫ ====================
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔨 Report Engine\n\n"
         "/report — жалобы (выбор причины)\n"
         "/fullreport — все причины сразу\n"
-        "/addaccount — добавить аккаунт\n"
+        "/addfile — загрузить .session файл\n"
+        "/addaccount — добавить session string\n"
         "/status — пул аккаунтов\n"
-        "/getsession — как получить session string\n"
         "/cancel — отмена"
     )
 
@@ -30,14 +34,65 @@ async def status_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     count = get_account_count()
     await update.message.reply_text(f"Активных аккаунтов: {count}")
 
-async def getsession_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+# ==================== ЗАГРУЗКА .session ФАЙЛА ====================
+
+async def addfile_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Варианты получить Session String:\n\n"
-        "1. @SessionGeneratorBot — выбери Telethon\n"
-        "2. @TelethonStringSessionBot\n"
-        "3. Replit.com → Python → вставь скрипт из инструкции\n\n"
-        "После получения строки → /addaccount"
+        "Отправь .session файл прямо сюда.\n"
+        "Можно несколько — по одному."
     )
+    return AWAIT_SESSION_FILE
+
+async def addfile_receive(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    doc = update.message.document
+
+    if not doc.file_name.endswith(".session"):
+        await update.message.reply_text("❌ Нужен файл с расширением .session")
+        return AWAIT_SESSION_FILE
+
+    msg = await update.message.reply_text(f"Обрабатываю {doc.file_name}…")
+
+    try:
+        file = await doc.get_file()
+        file_bytes = bytes(await file.download_as_bytearray())
+        import_session_file(file_bytes, doc.file_name)
+        count = get_account_count()
+        await msg.edit_text(
+            f"✅ {doc.file_name} добавлен.\n"
+            f"Всего в пуле: {count}\n\n"
+            "Отправь следующий файл или /cancel"
+        )
+    except ValueError as e:
+        await msg.edit_text(f"❌ {doc.file_name}: {e}")
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка: {e}")
+
+    return AWAIT_SESSION_FILE
+
+# ==================== ДОБАВИТЬ SESSION STRING ====================
+
+async def addacc_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Отправь Session String:")
+    return AWAIT_SESSION_STR
+
+async def addacc_session(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["session_str"] = update.message.text.strip()
+    await update.message.reply_text("Номер телефона (+7...):")
+    return AWAIT_PHONE
+
+async def addacc_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    phone       = update.message.text.strip()
+    session_str = ctx.user_data["session_str"]
+    try:
+        add_account(session_str, phone)
+        count = get_account_count()
+        await update.message.reply_text(
+            f"✅ {phone} добавлен.\n"
+            f"Всего в пуле: {count}"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+    return ConversationHandler.END
 
 # ==================== РЕПОРТ ====================
 
@@ -74,10 +129,9 @@ async def fullreport_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def fullreport_run(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     target = update.message.text.strip()
     count  = get_account_count()
-    reasons_n = len(ALL_REASONS)
     msg = await update.message.reply_text(
         f"Полный репорт на {target}\n"
-        f"{reasons_n} причины × {count} аккаунтов…"
+        f"{len(ALL_REASONS)} причины × {count} аккаунтов…"
     )
     r = await full_mass_report(target)
     await msg.edit_text(
@@ -86,33 +140,7 @@ async def fullreport_run(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# ==================== ДОБАВИТЬ АККАУНТ ====================
-
-async def addacc_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Отправь Session String аккаунта\n"
-        "(длинная строка начинается с 1BV... или похожая):"
-    )
-    return AWAIT_SESSION_STR
-
-async def addacc_session(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data["session_str"] = update.message.text.strip()
-    await update.message.reply_text("Номер телефона этого аккаунта (+7...):")
-    return AWAIT_PHONE
-
-async def addacc_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    phone       = update.message.text.strip()
-    session_str = ctx.user_data["session_str"]
-    try:
-        add_account(session_str, phone)
-        count = get_account_count()
-        await update.message.reply_text(
-            f"✅ Аккаунт {phone} добавлен.\n"
-            f"Всего в пуле: {count}"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
-    return ConversationHandler.END
+# ==================== ОТМЕНА ====================
 
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отменено.", reply_markup=ReplyKeyboardRemove())
@@ -129,9 +157,27 @@ def main():
         .build()
     )
 
-    app.add_handler(CommandHandler("start",      start))
-    app.add_handler(CommandHandler("status",     status_cmd))
-    app.add_handler(CommandHandler("getsession", getsession_help))
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler("status", status_cmd))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("addfile", addfile_start)],
+        states={
+            AWAIT_SESSION_FILE: [
+                MessageHandler(filters.Document.ALL, addfile_receive)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("addaccount", addacc_start)],
+        states={
+            AWAIT_SESSION_STR: [MessageHandler(filters.TEXT & ~filters.COMMAND, addacc_session)],
+            AWAIT_PHONE:       [MessageHandler(filters.TEXT & ~filters.COMMAND, addacc_phone)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    ))
 
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("report", report_start)],
@@ -146,15 +192,6 @@ def main():
         entry_points=[CommandHandler("fullreport", fullreport_start)],
         states={
             AWAIT_FULL_TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, fullreport_run)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    ))
-
-    app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("addaccount", addacc_start)],
-        states={
-            AWAIT_SESSION_STR: [MessageHandler(filters.TEXT & ~filters.COMMAND, addacc_session)],
-            AWAIT_PHONE:       [MessageHandler(filters.TEXT & ~filters.COMMAND, addacc_phone)],
         },
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
