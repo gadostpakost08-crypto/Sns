@@ -38,13 +38,15 @@ async def report_single(
             proxy=proxy
         ) as client:
             entity = await client.get_entity(target)
-            await client(ReportPeerRequest(
+            result = await client(ReportPeerRequest(
                 peer=entity,
                 reason=reason,
                 message=""
             ))
+            print(f"[OK] acc:{account_id} → {target} [{reason_key}] | {result}")
             return True
     except Exception as e:
+        print(f"[FAIL] acc:{account_id} → {target} [{reason_key}] | {e}")
         err = str(e).lower()
         if any(x in err for x in ["banned", "deactivated", "auth_key"]):
             deactivate_account(account_id)
@@ -66,10 +68,7 @@ async def mass_report(
     for i in range(0, len(accounts), batch_size):
         batch = accounts[i:i + batch_size]
         tasks = [
-            report_single(
-                session_str, acc_id, target,
-                reason_key, next(proxy_pool)
-            )
+            report_single(session_str, acc_id, target, reason_key, next(proxy_pool))
             for acc_id, session_str, phone in batch
         ]
         batch_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -83,7 +82,6 @@ async def mass_report(
     return results
 
 async def full_mass_report(target: str):
-    """Все причины подряд — максимальный удар."""
     total = {"ok": 0, "fail": 0}
     for reason in ALL_REASONS:
         r = await mass_report(target, reason)
