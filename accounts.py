@@ -1,27 +1,30 @@
 # language: Python 3.11, file: accounts.py
 import os
+import json
 from telethon.sync import TelegramClient
 from telethon.sessions import StringSession
-from config import API_ID, API_HASH
 from db import add_account
 
 SESSIONS_DIR = "sessions"
 
-def ensure_sessions_dir():
+def import_from_pair(session_bytes: bytes, json_bytes: bytes, filename: str) -> str:
+    """Принимает .session + .json, сам достаёт API данные."""
     os.makedirs(SESSIONS_DIR, exist_ok=True)
 
-def import_session_file(file_bytes: bytes, filename: str) -> str:
-    """Сохраняет .session файл и конвертирует в StringSession."""
-    ensure_sessions_dir()
+    # Читаем JSON
+    data     = json.loads(json_bytes.decode("utf-8"))
+    api_id   = int(data["api_id"])
+    api_hash = str(data["api_hash"])
+    phone    = str(data.get("phone", filename.replace(".session", "")))
+
+    # Сохраняем .session файл
     name = filename.replace(".session", "")
     path = os.path.join(SESSIONS_DIR, name)
-
-    # Сохраняем файл
     with open(path + ".session", "wb") as f:
-        f.write(file_bytes)
+        f.write(session_bytes)
 
-    # Конвертируем в строку
-    client = TelegramClient(path, API_ID, API_HASH)
+    # Конвертируем в StringSession
+    client = TelegramClient(path, api_id, api_hash)
     client.connect()
 
     if not client.is_user_authorized():
@@ -31,9 +34,7 @@ def import_session_file(file_bytes: bytes, filename: str) -> str:
 
     string = StringSession.save(client.session)
     client.disconnect()
-
-    # Удаляем файл после конвертации
     os.remove(path + ".session")
 
-    add_account(string, name)
-    return string
+    add_account(string, phone)
+    return phone
